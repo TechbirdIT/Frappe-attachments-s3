@@ -56,7 +56,7 @@ class S3Operations(object):
         file_name = regex.sub('', file_name)
         return file_name
 
-    def key_generator(self, file_name, parent_doctype, parent_name):
+    def key_generator(self, file_name, parent_doctype, parent_name, doc_path = None):
         """
         Generate keys for s3 objects uploaded with file name attached.
         """
@@ -85,30 +85,38 @@ class S3Operations(object):
         month = today.strftime("%m")
         day = today.strftime("%d")
 
-        doc_path = None
+        # doc_path = None
 
         if not doc_path:
             if self.folder_name:
-                final_key = self.folder_name + "/" + year + "/" + month + \
-                    "/" + day + "/" + parent_doctype + "/" + key + "_" + \
+                final_key = self.folder_name + "/" + parent_doctype + "/" + (parent_name + "/") if parent_name else "" + year + "/" + month + \
+                    "/" + day + "/" + key + "_" + \
                     file_name
             else:
-                final_key = year + "/" + month + "/" + day + "/" + \
-                    parent_doctype + "/" + key + "_" + file_name
+                final_key = parent_doctype + "/" + parent_name + "/" + year + "/" + month + "/" + day + "/" + \
+                    key + "_" + file_name
             return final_key
         else:
-            final_key = doc_path + '/' + key + "_" + file_name
+            if self.folder_name:
+                final_key = self.folder_name + "/" + parent_doctype + "/" + doc_path + '/' + year + "/" + month + \
+                    "/" + day + "/" + key + "_" + \
+                    file_name
+            else:
+                final_key = parent_doctype + "/" + doc_path + '/' + year + "/" + month + "/" + day + "/" + \
+                    key + "_" + file_name
+            # final_key = doc_path + '/' + key + "_" + file_name
             return final_key
 
     def upload_files_to_s3_with_key(
-            self, file_path, file_name, is_private, parent_doctype, parent_name
+            self, file_path, file_name, is_private, parent_doctype, parent_name, doc_path=None
     ):
         """
         Uploads a new file to S3.
         Strips the file extension to set the content_type in metadata.
         """
+        frappe.log_error(message = "Printed", title = "Upload to S3")
         mime_type = magic.from_file(file_path, mime=True)
-        key = self.key_generator(file_name, parent_doctype, parent_name)
+        key = self.key_generator(file_name, parent_doctype, parent_name, doc_path)
         content_type = mime_type
         try:
             if is_private:
@@ -135,7 +143,8 @@ class S3Operations(object):
                     }
                 )
 
-        except boto3.exceptions.S3UploadFailedError:
+        except boto3.exceptions.S3UploadFailedError as e:
+            frappe.log_error(message = str(e), title = "Upload Files to S3 Error")
             frappe.throw(frappe._("File Upload Failed. Please try again."))
         return key
 
@@ -195,7 +204,14 @@ class S3Operations(object):
         )
 
         return url
-
+    
+    def create_folder_fm_to_s3(self,folder, doc_name):
+        folder_key = self.folder_name + '/' + folder + '/'  # Extract folder path from key
+        if folder_key:
+            key = self.S3_CLIENT.put_object(Bucket=self.BUCKET, Key=folder_key, Body='')
+            frappe.log_error(message=f"Key : {str(key)},,,,,,,,,,,,, Foleder key  : {str(folder_key)}", title = "Key Error")
+            frappe.db.sql(f"""UPDATE `tabFile` SET content_hash='{folder_key}' WHERE name='{doc_name}'""")
+    
 
 @frappe.whitelist()
 def file_upload_to_s3(doc, method):
@@ -208,9 +224,31 @@ def file_upload_to_s3(doc, method):
     parent_doctype = doc.attached_to_doctype or 'File'
     parent_name = doc.attached_to_name
     ignore_s3_upload_for_doctype = frappe.local.conf.get('ignore_s3_upload_for_doctype') or ['Data Import']
+    s3_setting = frappe.get_single("S3 File Attachment")
     if parent_doctype not in ignore_s3_upload_for_doctype:
         if not doc.is_private:
-            file_path = site_path + '/public' + path
+            if doc.is_folder == 1 and not doc.attached_to_doctype:
+            #     folder_key = s3_setting.folder_name + '/' + doc.folder + '/'  # Extract folder path from key
+                # if folder_key:
+                doc_path = doc.doctype + '/' + doc.name
+                s3_upload.create_folder_fm_to_s3(folder = doc_path, doc_name = doc.name)
+                return
+            else:
+                file_path = site_path + '/public' + path
+        elif not doc.attached_to_doctype and doc.is_folder == 0:
+            file_path = site_path + path
+            frappe.log_error(message= f"Site Path :{site_path}, Path : {path}, File Path : {file_path} , File name : {doc.file_name}, Parent Doctype : {parent_doctype}, Parent Name : {parent_name}, Private : {doc.is_private}, Folder : {doc.folder}, Name : {doc.name}", title = "File Upload tio S3 Error")
+            key = s3_upload.upload_files_to_s3_with_key(
+                file_path, doc.file_name,
+                doc.is_private, parent_doctype,
+                parent_name, doc.folder
+                )
+            method = "frappe_s3_attachment.controller.generate_file"
+            file_url = """/api/method/{0}?key={1}&file_name={2}""".format(method, key, doc.file_name)
+            frappe.db.sql(f"""UPDATE `tabFile` SET file_url='{file_url}', content_hash='{key}' WHERE name='{doc.name}'""")
+            doc.file_url = file_url
+            frappe.log_error(message=f"Key : {str(key)},,,,,,,,,,,,, Foleder key  : {str(doc.folder)}", title = "Key Error")
+            return
         else:
             file_path = site_path + path
         key = s3_upload.upload_files_to_s3_with_key(
