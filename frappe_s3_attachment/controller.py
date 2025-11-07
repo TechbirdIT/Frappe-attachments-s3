@@ -255,6 +255,10 @@ def file_upload_to_s3(doc, method):
                 return
             else:
                 file_path = site_path + path
+                if not doc.is_folder and doc.attached_to_doctype and doc.attached_to_name and doc.folder == f"Home/Attachments":
+                    folder_path  = f"Home/Attachments/{doc.attached_to_doctype}/{doc.attached_to_name}"
+                    frappe.db.set_value("File", doc.name, "folder", folder_path)
+                    frappe.db.commit()
             key = s3_upload.upload_files_to_s3_with_key(
                 file_path, doc.file_name, doc.folder,
                 doc.is_private, parent_doctype,
