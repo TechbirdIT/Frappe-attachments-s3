@@ -12,7 +12,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 
 import frappe
-
+from frappe.core.api.file import create_new_folder
 
 import magic
 
@@ -231,6 +231,10 @@ def file_upload_to_s3(doc, method):
         parent_doctype = doc.attached_to_doctype or 'File'
         parent_name = doc.attached_to_name
         ignore_s3_upload_for_doctype = frappe.local.conf.get('ignore_s3_upload_for_doctype') or ['Data Import']
+        if not doc.is_folder and doc.attached_to_doctype and doc.attached_to_name and doc.folder == f"Home/Attachments":
+            folder_path  = f"Home/Attachments/{doc.attached_to_doctype}/{doc.attached_to_name}"
+            frappe.db.set_value("File", doc.name, "folder", folder_path)
+            frappe.db.commit()
         if parent_doctype not in ignore_s3_upload_for_doctype:
             # if not doc.is_private:
             #     if doc.is_folder == 1 and not doc.attached_to_doctype:
@@ -255,10 +259,6 @@ def file_upload_to_s3(doc, method):
                 return
             else:
                 file_path = site_path + path
-                if not doc.is_folder and doc.attached_to_doctype and doc.attached_to_name and doc.folder == f"Home/Attachments":
-                    folder_path  = f"Home/Attachments/{doc.attached_to_doctype}/{doc.attached_to_name}"
-                    frappe.db.set_value("File", doc.name, "folder", folder_path)
-                    frappe.db.commit()
             key = s3_upload.upload_files_to_s3_with_key(
                 file_path, doc.file_name, doc.folder,
                 doc.is_private, parent_doctype,
